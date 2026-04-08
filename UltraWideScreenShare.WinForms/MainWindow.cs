@@ -9,14 +9,20 @@ namespace UltraWideScreenShare.WinForms
     {
         private readonly Timer _dispatcherTimer = new Timer() { Interval = 2 }; //30fps
         private Point _tittleBarLocation = new Point();
-        private Magnifier _magnifier;
+        private Magnifier? _magnifier;
         private bool _isTransparent = false;
         private Color _frameColor = Color.FromArgb(255, 53, 89, 224); //#3559E0
         const int _borderWidth = 6;
         private bool _showMagnifierScheduled = true;
+        private readonly NotifyIcon _trayIcon;
+        private readonly ContextMenuStrip _trayMenu;
+        private bool _isExiting = false;
+        private FormWindowState _windowStateBeforeMinimize = FormWindowState.Normal;
         public MainWindow()
         {
             InitializeComponent();
+            _trayMenu = CreateTrayMenu();
+            _trayIcon = CreateTrayIcon(_trayMenu);
             TitleBar.BringToFront();
             InitializePaddingsForBorders();
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
@@ -27,6 +33,28 @@ namespace UltraWideScreenShare.WinForms
             base.OnCreateControl();
 
             this.InitializeMainWindowStyle();
+        }
+
+        private ContextMenuStrip CreateTrayMenu()
+        {
+            var menu = new ContextMenuStrip();
+            menu.Items.Add("Restore", null, (_, _) => RestoreFromTray());
+            menu.Items.Add("Exit", null, (_, _) => ExitApplication());
+            return menu;
+        }
+
+        private NotifyIcon CreateTrayIcon(ContextMenuStrip trayMenu)
+        {
+            var trayIcon = new NotifyIcon
+            {
+                ContextMenuStrip = trayMenu,
+                Icon = Icon,
+                Text = Text,
+                Visible = false,
+            };
+
+            trayIcon.DoubleClick += (_, _) => RestoreFromTray();
+            return trayIcon;
         }
 
         private void InitializePaddingsForBorders()
@@ -42,12 +70,35 @@ namespace UltraWideScreenShare.WinForms
             MaximizedBounds = new Rectangle(Point.Empty, Screen.GetWorkingArea(Location).Size);
             base.OnMove(e);
         }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+
+            if (WindowState == FormWindowState.Minimized && !_isExiting)
+            {
+                MinimizeToTray();
+                return;
+            }
+
+            if (WindowState != FormWindowState.Minimized)
+            {
+                _windowStateBeforeMinimize = WindowState;
+                SetupMaximizeButton();
+            }
+        }
+
         private void MainWindow_Load(object sender, EventArgs e)
         {
             _magnifier = new Magnifier(magnifierPanel.Handle);
             _dispatcherTimer.Start();
             _dispatcherTimer.Tick += (s, a) =>
             {
+                if (_magnifier is null)
+                {
+                    return;
+                }
+
                 _magnifier.UpdateMagnifierWindow();
                 if (magnifierPanel.Bounds.Contains(PointToClient(Cursor.Position)) && !TitleBar.Bounds.Contains(PointToClient(Cursor.Position)))
                 {
@@ -67,7 +118,7 @@ namespace UltraWideScreenShare.WinForms
             };
         }
 
-        private void MainWindow_ResizeBegin(object sender, EventArgs e) => _magnifier.HideMagnifier();
+        private void MainWindow_ResizeBegin(object sender, EventArgs e) => _magnifier?.HideMagnifier();
 
         private void MainWindow_ResizeEnd(object sender, EventArgs e) => _showMagnifierScheduled = true;
 
@@ -131,9 +182,38 @@ namespace UltraWideScreenShare.WinForms
         {
             _dispatcherTimer.Stop();
             _dispatcherTimer.Dispose();
+            _trayIcon.Visible = false;
+            _trayIcon.Dispose();
+            _trayMenu.Dispose();
             base.OnClosing(e);
         }
         private void minimizeButton_Click(object sender, EventArgs e) => WindowState = FormWindowState.Minimized;
+
+        private void MinimizeToTray()
+        {
+            _magnifier?.HideMagnifier();
+            _trayIcon.Visible = true;
+            Hide();
+            ShowInTaskbar = false;
+        }
+
+        private void RestoreFromTray()
+        {
+            Show();
+            ShowInTaskbar = true;
+            WindowState = _windowStateBeforeMinimize;
+            Activate();
+            _trayIcon.Visible = false;
+
+            _showMagnifierScheduled = true;
+            SetupMaximizeButton();
+        }
+
+        private void ExitApplication()
+        {
+            _isExiting = true;
+            Close();
+        }
 
         private void maximizeButton_Click(object sender, EventArgs e)
         {
